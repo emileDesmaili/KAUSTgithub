@@ -12,6 +12,7 @@ import xarray_regrid
 import subprocess
 from joblib import Parallel, delayed
 import dask.array as da
+import time
 
 #make a download directory
 import os
@@ -92,88 +93,26 @@ spi_obs = xr.load_dataset('data/spi3_cmap_1x1.nc')
 spi_obs = spi_obs.rename({'__xarray_dataarray_variable__':'spi'}).spi.sortby('T')
 
 
-nmme_dict =  {'cfsv2': cfsv2, 'gfdlspear': gfdlspear, 'cesm1': cesm1, 'colaccsm4': colaccsm4, 'nasageos': nasageos}
+start = time.time()
+print ("######################")
+print ("START PROCESSING")
+print('time: ', time.strftime("%H:%M:%S", time.gmtime(start)))
+print ("######################")
 
-precip_fcast_dict = {'cfsv2': None, 'gfdlspear': None, 'cesm1': None, 'colaccsm4': None, 'nasageos': None}
-spi_fcast_dict = {'cfsv2': None, 'gfdlspear': None, 'cesm1': None, 'colaccsm4': None, 'nasageos': None}
+nmme_dict = {
+    'cfsv2': cfsv2, 
+    'gfdlspear': gfdlspear, 
+    'cesm1': cesm1, 
+    'colaccsm4': colaccsm4, 
+    'nasageos': nasageos
+}
 
+precip_fcast_dict = {}
+spi_fcast_dict = {}
 
 n_lead = 6
 
-def compute_spi_for_start_date(s, fcast_start, P_bar, obs, x_range, y_range):
-    print(f"Processing SPI for forecast starting {fcast_start}")
-    
-    month = fcast_start.month
-
-    # Compute climatology and anomalies
-    P_bar_month = P_bar.sel(S=P_bar['S.month'] == month)
-    P_c = P_bar_month.where(P_bar_month['S'] != fcast_start).mean(dim='S')
-    P_a = P_bar - P_c
-
-    ty_1 = fcast_start - relativedelta(years=1)
-    ty_30 = fcast_start - relativedelta(years=30)
-
-    obs_month = obs.sel(T=obs['T.month'] == month)
-    obs_climo = obs_month.sel(T=slice(ty_30, ty_1)).mean(dim='T')
-    P_fcst = P_a + obs_climo
-    P_fcst_s = P_fcst.sel(S=fcast_start)
-
-    L_values = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5])[0:n_lead]
-    T_values = [fcast_start + pd.DateOffset(months=int(L - 0.5)) for L in L_values]
-
-    P_fcst = xr.concat(
-        [P_fcst_s.sel(L=L).expand_dims(T=[T]) for L, T in zip(L_values, T_values)],
-        dim="T"
-    ).drop_vars('L')
-
-    P_obs = obs.sel(T=slice(ty_30, fcast_start - relativedelta(months=1)))
-    blend_series = xr.concat([P_obs, P_fcst], dim='T').sortby('T')
-    blend_series_season = blend_series + blend_series.shift(T=1) + blend_series.shift(T=2)
-    blend_series_season = blend_series_season.dropna('T').sortby('T')
-
-    P_storage = np.full((n_lead, len(y_range), len(x_range)), np.nan)
-    spi_storage = np.full((n_lead, len(y_range), len(x_range)), np.nan)
-
-    for l in range(n_lead):
-        P_storage[l, :, :] = blend_series_season.isel(T=-n_lead + l).values
-
-    def compute_spi_single_grid(i, j, blend_series_season, s, l):
-        data_grid = blend_series_season.sel(X=x_range[j], Y=y_range[i])
-        t = s + pd.DateOffset(months=int(l))
-        t_month = t.month
-        data_grid_month = data_grid.sel(T=data_grid['T.month'] == t_month).values
-
-        if np.all(np.isnan(data_grid_month)):  # Skip if all values are NaN
-            return np.nan
-
-        try:
-            a, loc, scale = sp.stats.pearson3.fit(data_grid_month)
-            cdf_values = sp.stats.pearson3.cdf(data_grid_month, skew=a, loc=loc, scale=scale)
-            q = np.sum(data_grid_month == 0) / len(data_grid_month)
-            cdf_values = (cdf_values * (1 - q)) + q
-            cdf_values = np.clip(cdf_values, 1e-6, 1 - 1e-6)
-            spi_time_series = sp.stats.norm.ppf(cdf_values)
-            return spi_time_series[-1]
-        except Exception as e:
-            print(f"Error at (X={x_range[j]}, Y={y_range[i]}): {e}")
-            return np.nan
-
-    def compute_spi_for_time(s, l):
-        return Parallel(n_jobs=-1)(
-            delayed(compute_spi_single_grid)(i, j, blend_series_season, s, l)
-            for i in range(len(y_range))
-            for j in range(len(x_range))
-        )
-
-    for l in range(n_lead):
-        print(f"Computing SPI for lead time {l + 1}")
-        results = compute_spi_for_time(fcast_start, l)
-        spi_storage[l, :, :] = np.array(results).reshape(len(y_range), len(x_range))
-
-    return P_storage, spi_storage, fcast_start
-
-# Loop over NMME models
-for (nmme_name, nmme) in nmme_dict.items():
+def process_nmme(nmme_name, nmme):
     print(f"######################")
     print(f"Processing NMME: {nmme_name.upper()}")
     print(f"######################")
@@ -184,48 +123,110 @@ for (nmme_name, nmme) in nmme_dict.items():
     x_range = P_bar['X'].values
     y_range = P_bar['Y'].values
 
-    # Parallel execution for all forecast start dates
-    results = Parallel(n_jobs=-1)(
-        delayed(compute_spi_for_start_date)(s, fcast_starts[s].astype('datetime64[s]').item(), P_bar, obs, x_range, y_range)
-        for s in range(len(fcast_starts))
-    )
+    P_storage = np.full((len(fcast_starts), n_lead, len(y_range), len(x_range)), np.nan)
+    spi_storage = np.full((len(fcast_starts), n_lead, len(y_range), len(x_range)), np.nan)
 
-    # Collect results
-    P_storage_all = np.full((len(fcast_starts), n_lead, len(y_range), len(x_range)), np.nan)
-    spi_storage_all = np.full((len(fcast_starts), n_lead, len(y_range), len(x_range)), np.nan)
+    def compute_spi_single_grid(i, j, blend_series_season, s, l):
+        data_grid = blend_series_season.sel(X=x_range[j], Y=y_range[i])
+        t = s + pd.DateOffset(months=int(l))
+        t_month = t.month
+        data_grid_month = data_grid.sel(T=data_grid['T.month'] == t_month).values
 
-    for i, (P_storage, spi_storage, s) in enumerate(results):
-        P_storage_all[i, :, :, :] = P_storage
-        spi_storage_all[i, :, :, :] = spi_storage
+        if np.all(np.isnan(data_grid_month)):
+            return np.nan
+
+        try:
+            a, loc, scale = sp.stats.pearson3.fit(data_grid_month)
+            cdf_values = sp.stats.pearson3.cdf(data_grid_month, skew=a, loc=loc, scale=scale)
+            q = np.sum(data_grid_month == 0) / len(data_grid_month)
+            cdf_values = (cdf_values * (1 - q)) + q
+            cdf_values = np.clip(cdf_values, 1e-6, 1 - 1e-6)
+            return sp.stats.norm.ppf(cdf_values)[-1]
+        except Exception as e:
+            print(f"Error at (X={x_range[j]}, Y={y_range[i]}): {e}")
+            return np.nan
+
+    for s in range(len(fcast_starts)):
+        print(f"Computing SPI for {fcast_starts[s]}")
+        fcast_start = fcast_starts[s].astype('datetime64[s]').item()
+        month = fcast_start.month
+
+        P_bar_month = P_bar.sel(S=P_bar['S.month'] == month)
+        P_c = P_bar_month.where(P_bar_month['S'] != fcast_starts[s]).mean(dim='S')
+        P_a = P_bar - P_c
+
+        ty_1 = fcast_start - relativedelta(years=1)
+        ty_30 = fcast_start - relativedelta(years=30)
+
+        obs_month = obs.sel(T=obs['T.month'] == month)
+        obs_climo = obs_month.sel(T=slice(ty_30, ty_1)).mean(dim='T')
+        P_fcst = P_a + obs_climo
+        P_fcst_s = P_fcst.sel(S=fcast_start)
+
+        L_values = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5])[:n_lead]
+        T_values = [fcast_start + pd.DateOffset(months=int(L - 0.5)) for L in L_values]
+        P_fcst = xr.concat(
+            [P_fcst_s.sel(L=L).expand_dims(T=[T]) for L, T in zip(L_values, T_values)],
+            dim="T"
+        ).drop_vars('L')
+
+        P_obs = obs.sel(T=slice(ty_30, fcast_start - relativedelta(months=1)))
+        blend_series = xr.concat([P_obs, P_fcst], dim='T').sortby('T')
+        blend_series_season = blend_series + blend_series.shift(T=1) + blend_series.shift(T=2)
+        blend_series_season = blend_series_season.dropna('T').sortby('T')
+
+        for l in range(n_lead):
+            P_storage[s, l, :, :] = blend_series_season.isel(T=-n_lead + l).values
+
+            # Parallelized SPI computation
+            print(f"-Computing SPI for lead time {l + 1}")
+            results = Parallel(n_jobs=-1)(
+                delayed(compute_spi_single_grid)(i, j, blend_series_season, fcast_start, l)
+                for i in range(len(y_range))
+                for j in range(len(x_range))
+            )
+            spi_storage[s, l, :, :] = np.array(results).reshape(len(y_range), len(x_range))
 
     spi_s = xr.DataArray(
-        spi_storage_all,
+        spi_storage,
         dims=['S', 'L', 'Y', 'X'],
         coords={'S': fcast_starts, 'L': L_values, 'Y': y_range, 'X': x_range},
         name='spi'
     )
 
     P_s = xr.DataArray(
-        P_storage_all,
+        P_storage,
         dims=['S', 'L', 'Y', 'X'],
         coords={'S': fcast_starts, 'L': L_values, 'Y': y_range, 'X': x_range},
         name='precip'
     )
 
-    # Store results
     precip_fcast_dict[nmme_name] = P_s
     spi_fcast_dict[nmme_name] = spi_s
 
-    # Save results
     P_s.to_netcdf(f'data/{nmme_name}_precip_fcast.nc')
     spi_s.to_netcdf(f'data/{nmme_name}_spi_fcast.nc')
 
+# Run in parallel over NMME models
+Parallel(n_jobs=5,verbose=100)(delayed(process_nmme)(nmme_name, nmme) for nmme_name, nmme in nmme_dict.items())
+
+
+# end time
+end = time.time()
+#print time in format hh:mm:ss
+
+
+print ("######################")
+print ("DONE PROCESSING")
+print ('elapsed time:')
+print(time.strftime("%H:%M:%S", time.gmtime(end - start)))
+print ("######################")
 
 spi_fcast_multimodel = xr.concat([spi_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
 spi_fcast_multimodel.to_netcdf(f'data/spi_fcast_multimodel.nc')
 
-precip_fcast_mutlimodel = xr.concat([precip_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
-precip_fcast_mutlimodel.to_netcdf(f'data/precip_fcast_multimodel.nc')
+precip_fcast_multimodel = xr.concat([precip_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
+precip_fcast_multimodel.to_netcdf(f'data/precip_fcast_multimodel.nc')
 
 spi_fcast_multimodel = xr.load_dataset('data/spi_fcast_multimodel.nc')
 precip_fcast_multimodel = xr.load_dataset('data/precip_fcast_multimodel.nc')

@@ -12,13 +12,14 @@ import xarray_regrid
 import subprocess
 from joblib import Parallel, delayed
 import dask.array as da
-
+import time
 #make a download directory
 import os
 if not os.path.exists('download'):
     os.makedirs('download')
 if not os.path.exists('figures'):
     os.makedirs('figures')
+
 
 download = True
 
@@ -91,6 +92,12 @@ spi_obs = xr.load_dataset('data/spi3_cmap_1x1.nc')
 #rename variable __xarray_dataarray_variable__ to spi
 spi_obs = spi_obs.rename({'__xarray_dataarray_variable__':'spi'}).spi.sortby('T')
 
+# start time
+start = time.time()
+print ("######################")
+print ("START PROCESSING")
+print('time: ', time.strftime("%H:%M:%S", time.gmtime(start)))
+print ("######################")
 
 nmme_dict =  {'cfsv2': cfsv2, 'gfdlspear': gfdlspear, 'cesm1': cesm1, 'colaccsm4': colaccsm4, 'nasageos': nasageos}
 
@@ -217,11 +224,22 @@ for (nmme_name, nmme) in nmme_dict.items():
     spi_fcst.to_netcdf(f'data/{nmme_name}_spi_fcast.nc')
 
 
+# end time
+end = time.time()
+#print time in format hh:mm:ss
+
+
+print ("######################")
+print ("DONE PROCESSING")
+print ('elapsed time:')
+print(time.strftime("%H:%M:%S", time.gmtime(end - start)))
+print ("######################")
+
 spi_fcast_multimodel = xr.concat([spi_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
 spi_fcast_multimodel.to_netcdf(f'data/spi_fcast_multimodel.nc')
 
-precip_fcast_mutlimodel = xr.concat([precip_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
-precip_fcast_mutlimodel.to_netcdf(f'data/precip_fcast_multimodel.nc')
+precip_fcast_multimodel = xr.concat([precip_fcast_dict[nmme_name] for nmme_name in nmme_dict.keys()], dim='nmme').mean(dim='nmme')
+precip_fcast_multimodel.to_netcdf(f'data/precip_fcast_multimodel.nc')
 
 spi_fcast_multimodel = xr.load_dataset('data/spi_fcast_multimodel.nc')
 precip_fcast_multimodel = xr.load_dataset('data/precip_fcast_multimodel.nc')
