@@ -70,20 +70,17 @@ nasageos = xr.concat([nasageos, nasageos2], dim='S')
 #cansipsic4 = xr.open_dataset(cansipsic4_path, decode_times=True)
 
 
-obs = xr.open_dataset('data/precip_cmap.nc', decode_times=True)
+cmap_url = "https://iridl.ldeo.columbia.edu/SOURCES/.NOAA/.NCEP/.CPC/.Merged_Analysis/.monthly/.latest/.ver1/.prcp_est/X/-180/1/179/GRID/Y/-90/1/90/GRID/Y/12/37/RANGE/X/32/60/RANGE/T/(days%20since%201960-01-01)/streamgridunitconvert/data.nc"
+cmap_path = 'download/cmap_precip.nc'
 
-obs = obs.swap_dims({'time': 'T', 'lon': 'X', 'lat': 'Y'})
-obs = obs.assign_coords(T=obs.time, X=obs.lon, Y=obs.lat)
-obs = obs.drop_vars(['time', 'lat', 'lon'])
-obs = obs.sel(X=slice(30, 64), Y=slice(40, 10))
-obs = obs.transpose('T', 'Y', 'X')
+print(cmap_url)
+subprocess.call(['curl', '-b', 'cookies.txt', '-k', cmap_url, '-o', cmap_path])
 
-target_grid = cfsv2.rename({'S':'T'})
-data_regrid = obs.interp(X=target_grid['X'], Y=target_grid['Y'])
-#replace all negative values with 0
-data_regrid['precip'] = data_regrid['precip'].where(data_regrid['precip'] > 0, 0)
-
-obs = data_regrid['precip']
+cmap = xr.open_dataset(cmap_path, decode_times=True)
+#change datetime to 01-MM-YYYY
+new_dates = pd.to_datetime(cmap['T'].values, format="%d-%m-%Y").strftime("01-%m-%Y")
+cmap['T'] = pd.to_datetime(new_dates, format="%d-%m-%Y")
+obs = cmap['prcp_est']
 
 obs_3m = obs + obs.shift(T=1) + obs.shift(T=2)
 obs_3m = obs_3m.dropna('T')
