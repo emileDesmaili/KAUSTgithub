@@ -1,3 +1,8 @@
 data/
 download/
 figures/
+*.csv
+*.h5
+*.nc
+tables/
+
