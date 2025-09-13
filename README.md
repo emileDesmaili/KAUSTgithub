@@ -1,8 +1,12 @@
-# Code for KAUST SPI Task 7
+# Code for MAE, EE et al. 2025 "Droughts in Arabian Peninsula" 
 
-- SPI3 Hindcast are computed in the `SPI3_Hindcast.ipynb` notebook.
-- SPI3 Forecast are computed in the `SPI3_Forecast_2324.ipynb` notebook.
-- SPI3 calculation for 1x1 CMAP Observations are computed in the `SPI3_CMAP_1x1.ipynb` notebook.
+- create the conda environment by this command:
+    ```conda env create -f environment.yml```
+- activate the environment:
+    ```conda activate ap-drought```
+
+
+If solving the env does not work, install the dependencies manually
 
 ## Dependencies
 
@@ -13,4 +17,11 @@
 - netCDF4
 - matplotlib
 - cartopy
-- 
+- statsmodels
+
+
+# Replicate Figures
+
+- The Observed SPI3 calculation is in the ```SPI3_CMAP_1x1.ipynb``` notebook
+- Each figure has its own notebook in the respective folder
+- The data is in the ```data``` folder
