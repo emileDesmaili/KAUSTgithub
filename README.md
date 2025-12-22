@@ -22,6 +22,5 @@ If solving the env does not work, install the dependencies manually
 
 # Replicate Figures
 
-- The Observed SPI3 calculation is in the ```SPI3_CMAP_1x1.ipynb``` notebook
+- The Observed SPI3 calculation is in **Observed SPI** folder, ```SPI3_CMAP_1x1.ipynb``` notebook
 - Each figure has its own notebook in the respective folder
-- The data is in the ```data``` folder
